@@ -24,7 +24,7 @@ from matching import (
 )
 
 # ===================== 配置 =====================
-BASE_DIR = Path("/Users/freey/Desktop/运达智服工作/解决方案部/3_数据分析工作/19-ai自动上架物料")
+BASE_DIR = Path(__file__).parent
 
 FILE_1_PATH = BASE_DIR / "1-原始命名.xlsx"
 FILE_2_PATH = BASE_DIR / "2-业主需要上架物资.xlsx"
@@ -545,4 +545,4 @@ if q_submit and q_name:
 
 # ---------- 底部 ----------
 st.divider()
-st.caption("运达智服 - 物料图片自动匹配系统 v1.0")
+st.caption("物料图片自动匹配系统 v1.0")

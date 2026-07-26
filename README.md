@@ -141,5 +141,5 @@ pyinstaller build.spec
 ---
 
 <div align="center">
-  <p>运达智服 · 物料图片自动匹配系统</p>
+  <p>物料图片自动匹配系统</p>
 </div>

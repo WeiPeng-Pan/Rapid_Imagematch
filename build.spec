@@ -76,7 +76,7 @@ app = BUNDLE(
     exe,
     name='物料图片匹配系统.app',
     icon='icon.icns' if Path('icon.icns').exists() else None,
-    bundle_identifier='com.yundazhifu.material-image-matcher',
+    bundle_identifier='com.rapid-imagematch.app',
     info_plist={
         'NSHighResolutionCapable': True,
         'CFBundleDisplayName': '物料图片匹配系统',
