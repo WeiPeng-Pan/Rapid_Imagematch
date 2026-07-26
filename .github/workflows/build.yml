@@ -1,9 +1,9 @@
 name: Build Windows EXE
-"on":
+on:
     workflow_dispatch:
     push:
       tags:
-        - "v*"
+        - 'v*'
 jobs:
     build:
       runs-on: windows-latest
@@ -11,7 +11,7 @@ jobs:
         - uses: actions/checkout@v4
         - uses: actions/setup-python@v5
           with:
-            python-version: "3.11"
+            python-version: '3.11'
         - name: Install
           run: pip install -r requirements.txt pyinstaller
         - name: Build
@@ -20,7 +20,7 @@ jobs:
             --clean
             --windowed
             --onefile
-            --name "Rapid_Imagematch"
+            --name Rapid_Imagematch
             --hidden-import matching
             --hidden-import openpyxl
             --hidden-import openpyxl.cell._writer
