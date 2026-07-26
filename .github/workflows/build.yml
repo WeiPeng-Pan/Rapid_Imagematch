@@ -1,0 +1,30 @@
+name: Build Windows EXE
+
+  on:
+    push:
+      tags:
+        - 'v*'
+    workflow_dispatch:
+
+  jobs:
+    build:
+      runs-on: windows-latest
+
+      steps:
+        - uses: actions/checkout@v4
+        - uses: actions/setup-python@v5
+          with:
+            python-version: '3.11'
+
+        - name: 安装依赖并打包
+          run: |
+            pip install -r requirements.txt
+            pip install pyinstaller
+            pyinstaller --clean --windowed --onefile --name "物料图片匹配系统" --add-data "matching.py;." --hidden-import openpyxl 
+  --hidden-import openpyxl.cell._writer --hidden-import PIL --hidden-import PIL.Image --hidden-import PIL.ImageTk --hidden-import 
+  jieba --hidden-import jieba.posseg --hidden-import jieba.analyse --hidden-import customtkinter app_ctk.py
+
+        - uses: actions/upload-artifact@v4
+          with:
+            name: 物料图片匹配系统-Windows
+            path: dist/物料图片匹配系统.exe
