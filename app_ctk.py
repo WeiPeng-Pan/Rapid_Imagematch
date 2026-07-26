@@ -19,14 +19,21 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+if getattr(sys, 'frozen', False):
+    sys.path.insert(0, sys._MEIPASS)
+else:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from matching import clean_str, attention_score, build_idf_dict, build_candidate_text
 
 # ===================== 配置 =====================
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 
-BASE_DIR = Path(__file__).parent
+# 兼容 PyInstaller 打包模式（frozen）
+if getattr(sys, 'frozen', False):
+    BASE_DIR = Path(sys.executable).parent
+else:
+    BASE_DIR = Path(__file__).parent
 OUTPUT_DIR = BASE_DIR / "匹配结果输出"
 
 ZOOM_STEP = 0.15
@@ -1101,7 +1108,12 @@ class App(ctk.CTk):
                 f"命名格式: 01-物料名称-型号.jpg")
             try:
                 import subprocess
-                subprocess.run(["open", dp])
+                if sys.platform == "darwin":
+                    subprocess.run(["open", dp])
+                elif sys.platform == "win32":
+                    os.startfile(dp)
+                else:
+                    subprocess.run(["xdg-open", dp])
             except Exception:
                 pass
         except Exception as e:
