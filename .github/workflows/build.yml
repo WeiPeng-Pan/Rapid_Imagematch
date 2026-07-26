@@ -1,47 +1,24 @@
 name: Build Windows EXE
-
   on:
     push:
       tags:
         - 'v*'
     workflow_dispatch:
-
   jobs:
     build:
       runs-on: windows-latest
-
       steps:
         - uses: actions/checkout@v4
-
         - uses: actions/setup-python@v5
           with:
             python-version: '3.11'
-
-        - name: Install dependencies
-          run: |
-            pip install -r requirements.txt
-            pip install pyinstaller
-
-        - name: Build EXE
+        - name: Install
+          run: pip install -r requirements.txt pyinstaller
+        - name: Build
           run: pyinstaller --clean --windowed --onefile --name "物料图片匹配系统" --add-data "matching.py;." --hidden-import openpyxl
   --hidden-import openpyxl.cell._writer --hidden-import PIL --hidden-import PIL.Image --hidden-import PIL.ImageTk --hidden-import
   jieba --hidden-import jieba.posseg --hidden-import jieba.analyse --hidden-import customtkinter app_ctk.py
-
         - uses: actions/upload-artifact@v4
           with:
             name: 物料图片匹配系统-Windows
             path: dist/物料图片匹配系统.exe
-
-        - name: Create Release
-          if: startsWith(github.ref, 'refs/tags/v')
-          uses: softprops/action-gh-release@v2
-          with:
-            files: dist/物料图片匹配系统.exe
-            body: |
-              ## 物料图片匹配系统
-
-              ### 使用方法
-              1. 下载 EXE 文件
-              2. 双击运行
-              3. 选择图片文件夹和物料清单
-              4. 开始匹配 → 导出结果
