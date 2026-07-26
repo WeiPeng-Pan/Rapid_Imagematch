@@ -1,5 +1,4 @@
 name: Build Windows EXE
-
 on:
   push:
     tags:
@@ -10,22 +9,19 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: pip
 
-      - name: Install dependencies
+      - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+          pip install -r requirements.txt pyinstaller
 
-      - name: Build executable with PyInstaller
+      - name: Build EXE
         run: >
           pyinstaller
           --clean
@@ -43,7 +39,7 @@ jobs:
           --hidden-import customtkinter
           app_ctk.py
 
-      - name: Upload build artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: Rapid_Imagematch-Windows
