@@ -1,0 +1,7 @@
+# 物料图片匹配系统 - 依赖清单
+# 安装: pip install -r requirements.txt
+
+openpyxl>=3.1.0        # Excel 文件读写
+Pillow>=10.0.0         # 图片处理
+jieba>=0.42.0          # 中文分词（注意力算法核心依赖）
+customtkinter>=5.0.0   # 现代化 GUI（用于 app_ctk.py）
