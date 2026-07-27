@@ -103,8 +103,9 @@ class DataLoader:
         if not img_dir.exists():
             raise FileNotFoundError(f"图片目录不存在: {img_dir}")
         images = []
-        for f in sorted(img_dir.iterdir()):
-            if f.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"):
+        # 递归扫描所有子目录（rglob 递归匹配所有文件）
+        for f in sorted(img_dir.rglob("*")):
+            if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"):
                 stem = f.stem
                 clean_stem = re.sub(r"[-_]\d+$", "", stem)
                 images.append({
