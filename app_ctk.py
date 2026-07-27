@@ -194,26 +194,31 @@ class MatcherEngine:
 # ===================== 导出器 =====================
 class Exporter:
     @staticmethod
-    def _pick_image(results, user_selections, item_idx):
-        """根据用户选择或最佳匹配，返回 (img_info, score) 或 None"""
+    def _pick_images(results, export_selections, item_idx):
+        """
+        返回该物项要导出的所有图片 [(img_info, score), ...]
+        如果 export_selections 有勾选，用勾选的；否则用最佳匹配
+        """
         if item_idx < 0 or item_idx >= len(results):
-            return None
+            return []
         res = results[item_idx]
         if not res["matches"]:
-            return None
+            return []
 
-        # 用户手动选择了某张图
-        if user_selections and item_idx in user_selections:
-            sel_path = user_selections[item_idx]
+        if export_selections and item_idx in export_selections:
+            sel_paths = export_selections[item_idx]
+            picked = []
             for img, score in res["matches"]:
-                if img["path"] == sel_path:
-                    return (img, score)
+                if img["path"] in sel_paths:
+                    picked.append((img, score))
+            if picked:
+                return picked
 
         # 默认取最佳匹配
-        return res["matches"][0]
+        return [res["matches"][0]]
 
     @staticmethod
-    def export_all(results, export_dir, threshold_used, image_dir_src, user_selections=None):
+    def export_all(results, export_dir, threshold_used, image_dir_src, export_selections=None):
         import openpyxl
         export_dir = Path(export_dir)
         export_dir.mkdir(parents=True, exist_ok=True)
@@ -221,35 +226,42 @@ class Exporter:
         img_dir.mkdir(parents=True, exist_ok=True)
         copied, used_names = [], set()
 
-        # 只导出每项选中的那张图（最佳匹配或用户手动选择）
+        # 导出每项勾选的图片（可以是多张）
         for i in range(len(results)):
-            picked = Exporter._pick_image(results, user_selections, i)
-            if picked is None:
-                continue
-            img, score = picked
-            item = results[i]["item"]
-            seq = f"{i+1:02d}"
-            name_part = sanitize_filename(item["物料名称"])
-            model_part = sanitize_filename(item.get("型号", ""))
-            new_name = f"{seq}-{name_part}-{model_part}{img['ext']}" if model_part else f"{seq}-{name_part}{img['ext']}"
-            if new_name in used_names:
-                base = new_name[:new_name.rfind(".")]
-                new_name = f"{base}_v{seq}{img['ext']}"
-            used_names.add(new_name)
-            try:
-                shutil.copy2(img["path"], img_dir / new_name)
-                copied.append({"original": img["filename"], "renamed": new_name, "score": score, "item_idx": i + 1})
-            except Exception:
-                pass
+            picked_list = Exporter._pick_images(results, export_selections, i)
+            for rank, (img, score) in enumerate(picked_list):
+                item = results[i]["item"]
+                seq = f"{i+1:02d}"
+                name_part = sanitize_filename(item["物料名称"])
+                model_part = sanitize_filename(item.get("型号", ""))
+                if model_part:
+                    new_name = f"{seq}-{name_part}-{model_part}{img['ext']}"
+                else:
+                    new_name = f"{seq}-{name_part}{img['ext']}"
+                # 同一物项多张图加 _a, _b 后缀
+                if len(picked_list) > 1:
+                    suffix = chr(ord('a') + rank)
+                    base = new_name[:new_name.rfind(".")]
+                    new_name = f"{base}_{suffix}{img['ext']}"
+                # 避免重名
+                if new_name in used_names:
+                    base = new_name[:new_name.rfind(".")]
+                    new_name = f"{base}_v{seq}{img['ext']}"
+                used_names.add(new_name)
+                try:
+                    shutil.copy2(img["path"], img_dir / new_name)
+                    copied.append({"original": img["filename"], "renamed": new_name, "score": score, "item_idx": i + 1})
+                except Exception:
+                    pass
 
         excel_rows = []
         for i in range(len(results)):
             item = results[i]["item"]
-            picked = Exporter._pick_image(results, user_selections, i)
-            if picked:
-                img, score = picked
-                renamed = next((c["renamed"] for c in copied if c["original"] == img["filename"] and c["item_idx"] == i + 1), img["filename"])
-                excel_rows.append({"序号": i + 1, "物料名称": item["物料名称"], "型号": item.get("型号",""), "品牌": item.get("品牌",""), "参数": item.get("参数",""), "匹配分数": score, "输出图片名": renamed})
+            picked_list = Exporter._pick_images(results, export_selections, i)
+            if picked_list:
+                for img, score in picked_list:
+                    renamed = next((c["renamed"] for c in copied if c["original"] == img["filename"] and c["item_idx"] == i + 1), img["filename"])
+                    excel_rows.append({"序号": i + 1, "物料名称": item["物料名称"], "型号": item.get("型号",""), "品牌": item.get("品牌",""), "参数": item.get("参数",""), "匹配分数": score, "输出图片名": renamed})
             else:
                 excel_rows.append({"序号": i + 1, "物料名称": item["物料名称"], "型号": item.get("型号",""), "品牌": item.get("品牌",""), "参数": item.get("参数",""), "匹配分数": "无", "输出图片名": "未匹配到"})
 
@@ -263,11 +275,11 @@ class Exporter:
                 ws.append([rd.get(h,"") for h in headers])
             wb.save(export_dir / "匹配结果汇总.xlsx")
 
-        html_path = Exporter._gen_html(results, copied, export_dir, threshold_used, image_dir_src, user_selections)
+        html_path = Exporter._gen_html(results, copied, export_dir, threshold_used, image_dir_src, export_selections)
         return {"total": len(results), "matched": sum(1 for r in results if r["matched"]), "images_copied": len(copied), "excel_path": str(export_dir / "匹配结果汇总.xlsx"), "html_path": str(html_path), "img_dir": str(img_dir)}
 
     @staticmethod
-    def _gen_html(results, copied, export_dir, threshold_used, image_dir_src, user_selections=None):
+    def _gen_html(results, copied, export_dir, threshold_used, image_dir_src, export_selections=None):
         html = [
             "<!DOCTYPE html><html><head><meta charset='utf-8'><title>物料图片匹配结果</title>",
             "<style>",
@@ -295,12 +307,12 @@ class Exporter:
             if item.get("品牌"): html.append(f"<span>品牌: {item['品牌']}</span>")
             if item.get("参数"): html.append(f"<span>参数: {item['参数']}</span>")
             html.append("</div>")
-            picked = Exporter._pick_image(results, user_selections, i)
-            if picked:
-                img, score = picked
-                renamed = next((c["renamed"] for c in copied if c["original"] == img["filename"] and c["item_idx"] == i + 1), img["filename"])
+            picked_list = Exporter._pick_images(results, export_selections, i)
+            if picked_list:
                 html.append("<div class='images'>")
-                html.append(f"<div class='card'><img src='图片/{renamed}' alt='{renamed}'><div class='score'>匹配度: {score}分</div><div style='font-size:11px;color:#999'>→ {renamed}</div></div>")
+                for img, score in picked_list:
+                    renamed = next((c["renamed"] for c in copied if c["original"] == img["filename"] and c["item_idx"] == i + 1), img["filename"])
+                    html.append(f"<div class='card'><img src='图片/{renamed}' alt='{renamed}'><div class='score'>匹配度: {score}分</div><div style='font-size:11px;color:#999'>→ {renamed}</div></div>")
                 html.append("</div>")
             else:
                 html.append("<div class='no-match'>❌ 未匹配到图片</div>")
@@ -461,6 +473,7 @@ class App(ctk.CTk):
         self.material_rows = []
         self._ctk_img_ref = None
         self._user_selections = {}  # 用户手动选择的图片 {item_idx: img_path}
+        self._export_selections = {}  # 导出勾选 {item_idx: set(img_path1, img_path2, ...)}
 
         # 构建UI
         self._build_ui()
@@ -750,14 +763,38 @@ class App(ctk.CTk):
             self._show_placeholder()
             return
 
-        # 确定当前选中的图片
+        # 找到 item_idx
+        item_idx = None
+        for i, r in enumerate(self.match_results):
+            if r is result:
+                item_idx = i
+                break
+
+        # 如果还没初始化导出勾选，自动勾选最佳匹配
+        if item_idx is not None and item_idx not in self._export_selections:
+            self._export_selections[item_idx] = {matches[0][0]["path"]}
+
+        # 更新用户手动选择（用于预览）
         sel_idx = self._get_selected_match_idx(result)
         best_img, best_score = matches[sel_idx]
+
+        # 统计勾选数
+        checked_count = 0
+        if item_idx is not None and item_idx in self._export_selections:
+            checked_count = len(self._export_selections[item_idx])
+
         self.match_status.configure(text="✅ 已匹配", text_color="#1565C0")
-        self.match_score.configure(text=f"当前选中: {best_score} 分  |  点击下方卡片切换", text_color="#1565C0")
+
+        total = len(matches)
+        if checked_count > 0:
+            self.match_score.configure(text=f"预览: {best_score} 分 | 导出勾选: {checked_count}/{total} 张",
+                                       text_color="#1565C0")
+        else:
+            self.match_score.configure(text=f"预览: {best_score} 分 | 点击✓勾选导出",
+                                       text_color="#1565C0")
 
         # 提示文字
-        hint = ctk.CTkLabel(self.match_files_f, text="候选图片（点击切换）",
+        hint = ctk.CTkLabel(self.match_files_f, text="点击卡片预览 | 点击✓切换导出勾选",
                             font=ctk.CTkFont(size=11), text_color="#757575")
         hint.pack(anchor="w", padx=4, pady=(0, 6))
 
@@ -765,12 +802,13 @@ class App(ctk.CTk):
         cards_frame = ctk.CTkFrame(self.match_files_f, fg_color="transparent")
         cards_frame.pack(fill="x", padx=2)
 
-        # 存储卡片组件引用（防GC）
         self._thumb_refs = []
 
         for idx, (img, score) in enumerate(matches):
             is_active = (idx == sel_idx)
-            card = self._build_thumb_card(cards_frame, img, score, idx, is_active, result)
+            is_checked = (item_idx is not None and item_idx in self._export_selections
+                          and img["path"] in self._export_selections[item_idx])
+            card = self._build_thumb_card(cards_frame, img, score, idx, is_active, is_checked, result)
             card.pack(side="left", padx=4, pady=4)
             self._thumb_refs.append(card)
 
@@ -791,13 +829,18 @@ class App(ctk.CTk):
                     return j
         return 0  # 默认选第一个
 
-    def _build_thumb_card(self, parent, img_info, score, idx, is_active, result):
+    def _build_thumb_card(self, parent, img_info, score, idx, is_active, is_checked, result):
         """构建一张候选缩略图卡片"""
         card = ctk.CTkFrame(parent, corner_radius=8, width=85, height=110)
         card.pack_propagate(False)
 
-        # 边框：选中时蓝色，未选时灰色
-        border_color = "#1565C0" if is_active else "#E0E0E0"
+        # 边框：蓝色=预览选中，绿色=导出勾选
+        if is_checked:
+            border_color = "#2E7D32"  # 绿色=已勾选导出
+        elif is_active:
+            border_color = "#1565C0"  # 蓝色=预览中
+        else:
+            border_color = "#E0E0E0"  # 灰色=未选
         card.configure(fg_color=border_color)
 
         # 内衬白色背景
@@ -818,22 +861,35 @@ class App(ctk.CTk):
 
         score_lbl = ctk.CTkLabel(inner, text=f"{score}分",
                                   font=ctk.CTkFont(size=10, weight="bold"),
-                                  text_color="#1565C0" if is_active else "#757575")
+                                  text_color="#2E7D32" if is_checked else "#757575")
         score_lbl.pack(pady=(1, 3))
 
-        # 点击切换
-        def on_click(e, i=idx, r=result):
-            self._on_thumb_click(i, r)
+        # 左下角勾选标记
+        check_text = "✓" if is_checked else "○"
+        check_lbl = ctk.CTkLabel(inner, text=check_text, width=16,
+                                  font=ctk.CTkFont(size=12, weight="bold"),
+                                  text_color="#2E7D32" if is_checked else "#BDBDBD")
+        check_lbl.pack(side="left", padx=(4, 0), pady=(0, 3))
+
+        # 点击图片区域 → 预览
+        def on_preview(e, i=idx, r=result):
+            self._on_thumb_click(i, r, toggle=False)
+
+        # 点击✓标记 → 切换导出勾选
+        def on_toggle(e, i=idx, r=result):
+            self._on_thumb_click(i, r, toggle=True)
 
         for w in (card, inner, img_lbl, score_lbl):
-            w.bind("<Button-1>", on_click)
+            w.bind("<Button-1>", on_preview)
             w.configure(cursor="hand2")
+
+        check_lbl.bind("<Button-1>", on_toggle)
+        check_lbl.configure(cursor="hand2")
 
         return card
 
-    def _on_thumb_click(self, match_idx, result):
+    def _on_thumb_click(self, match_idx, result, toggle=False):
         """用户点击了某张候选缩略图"""
-        # 找到这个 result 在 match_results 中的索引
         item_idx = None
         for i, r in enumerate(self.match_results):
             if r is result:
@@ -844,12 +900,23 @@ class App(ctk.CTk):
 
         img, score = result["matches"][match_idx]
 
-        # 存储用户选择
-        if not hasattr(self, '_user_selections'):
-            self._user_selections = {}
-        self._user_selections[item_idx] = img["path"]
+        if toggle:
+            # 切换导出勾选
+            if item_idx not in self._export_selections:
+                # 如果全取消勾选，至少要勾一个
+                self._export_selections[item_idx] = set()
+            if img["path"] in self._export_selections[item_idx]:
+                # 至少保留1张勾选
+                if len(self._export_selections[item_idx]) > 1:
+                    self._export_selections[item_idx].discard(img["path"])
+            else:
+                self._export_selections[item_idx].add(img["path"])
+        else:
+            # 点击预览：更新手动选择
+            if not hasattr(self, '_user_selections'):
+                self._user_selections = {}
+            self._user_selections[item_idx] = img["path"]
 
-        # 刷新当前选中项的显示
         self._display_result(result)
 
     # ===================== 图片预览（含缩放/旋转） =====================
@@ -1100,7 +1167,7 @@ class App(ctk.CTk):
         try:
             src = str(self.image_dir_path) if self.image_dir_path else ""
             st = Exporter.export_all(self.match_results, dp, self.threshold, src,
-                                       user_selections=self._user_selections)
+                                       export_selections=self._export_selections)
             self._set_status(f"导出成功: {st['matched']}/{st['total']} 项, {st['images_copied']} 张图片")
             self.btn_export.configure(state="normal")
             messagebox.showinfo("导出完成",
