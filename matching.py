@@ -101,10 +101,12 @@ def build_idf_dict(all_texts: list) -> dict:
     return idf
 
 
-def attention_score(query: str, candidate: str, idf_dict: dict) -> float:
+def attention_score(query: str, candidate: str, idf_dict: dict,
+                    model_text: str = "") -> float:
     """
     注意力评分核心函数
     返回 0-100 的匹配度分数
+    model_text: 规格型号原文，单独用于型号匹配奖励（最准确列，权重更高）
     """
     if not query or not candidate:
         return 0.0
@@ -181,7 +183,27 @@ def attention_score(query: str, candidate: str, idf_dict: dict) -> float:
         if missing > 0 and matched_model_count == 0:
             spec_penalty = 15.0 * min(missing, 3)
 
-    final_score = base_score + bonus - len_penalty - spec_penalty
+    # --- 型号匹配奖励（型号列是最准确的匹配信号）---
+    model_bonus = 0.0
+    if model_text:
+        mt_clean = clean_str(str(model_text))
+        if mt_clean.strip():
+            mt_tokens = set()
+            if jieba:
+                for token in jieba.cut(mt_clean):
+                    token = token.strip()
+                    if token:
+                        mt_tokens.add(token)
+            for i in range(len(mt_clean) - 1):
+                gram = mt_clean[i:i+2]
+                if gram.strip():
+                    mt_tokens.add(gram)
+            if mt_tokens:
+                match_count = sum(1 for t in mt_tokens if t in candidate)
+                ratio = match_count / len(mt_tokens)
+                model_bonus = ratio * 15.0  # 最高 +15 分
+
+    final_score = base_score + bonus - len_penalty - spec_penalty + model_bonus
     return max(0.0, min(100.0, final_score))
 
 
@@ -220,13 +242,12 @@ def find_best_match(
     return best_idx, best_score, best_score >= threshold
 
 
-def build_candidate_text(name: str, model: str, brand: str = "", params: str = "") -> str:
-    """构建候选文本字符串用于匹配"""
+def build_candidate_text(name: str, model: str = "") -> str:
+    """
+    构建候选文本字符串用于匹配
+    仅使用物料名称 + 型号（图片文件名中仅包含这两部分信息）
+    """
     parts = [clean_str(name)]
     if model and str(model).strip():
         parts.append(clean_str(str(model)))
-    if brand and str(brand).strip():
-        parts.append(clean_str(str(brand)))
-    if params and str(params).strip():
-        parts.append(clean_str(str(params)))
     return " ".join(parts)

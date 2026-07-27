@@ -165,13 +165,15 @@ class MatcherEngine:
 
     def match(self, item):
         query = build_candidate_text(
-            item["物料名称"], item.get("型号", ""), item.get("品牌", ""), item.get("参数", "")
+            item["物料名称"], item.get("型号", "")
         )
+        model_text = item.get("型号", "")
         if not query.strip():
             return []
         results = []
         for idx, img in enumerate(self.images):
-            score = attention_score(query, self.candidate_texts[idx], self.idf_dict)
+            score = attention_score(query, self.candidate_texts[idx], self.idf_dict,
+                                    model_text=model_text)
             if score >= self.threshold:
                 results.append((img, round(score, 1)))
         results.sort(key=lambda x: x[1], reverse=True)
