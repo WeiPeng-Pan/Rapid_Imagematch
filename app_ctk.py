@@ -475,6 +475,11 @@ class App(ctk.CTk):
         self._user_selections = {}  # 用户手动选择的图片 {item_idx: img_path}
         self._export_selections = {}  # 导出勾选 {item_idx: set(img_path1, img_path2, ...)}
 
+        # 性能优化缓存
+        self._thumb_cache = {}  # {path: ctk.CTkImage} 缩略图缓存
+        self._display_cache = {}  # {(item_idx, thumb_size): ...} 展示结果缓存
+        self._zoom_timer = None  # 缩放防抖定时器
+
         # 构建UI
         self._build_ui()
 
@@ -743,13 +748,13 @@ class App(ctk.CTk):
             w.destroy()
 
         if self.match_results and index - 1 < len(self.match_results):
-            self._display_result(self.match_results[index - 1])
+            self._display_result(self.match_results[index - 1], index - 1)
         else:
             self.match_status.configure(text="尚未匹配")
             self.match_score.configure(text="")
             self._show_placeholder()
 
-    def _display_result(self, result):
+    def _display_result(self, result, item_idx=None):
         matches = result["matches"]
         # 清除旧内容
         for w in self.match_files_f.winfo_children():
@@ -763,19 +768,19 @@ class App(ctk.CTk):
             self._show_placeholder()
             return
 
-        # 找到 item_idx
-        item_idx = None
-        for i, r in enumerate(self.match_results):
-            if r is result:
-                item_idx = i
-                break
+        # 找到 item_idx（如果没传就线性搜索）
+        if item_idx is None:
+            for i, r in enumerate(self.match_results):
+                if r is result:
+                    item_idx = i
+                    break
 
         # 如果还没初始化导出勾选，自动勾选最佳匹配
         if item_idx is not None and item_idx not in self._export_selections:
             self._export_selections[item_idx] = {matches[0][0]["path"]}
 
         # 更新用户手动选择（用于预览）
-        sel_idx = self._get_selected_match_idx(result)
+        sel_idx = self._get_selected_match_idx(result, item_idx)
         best_img, best_score = matches[sel_idx]
 
         # 统计勾选数
@@ -815,19 +820,34 @@ class App(ctk.CTk):
         # 显示选中图片
         self._show_image(best_img["path"], best_img["filename"], best_score)
 
-    def _get_selected_match_idx(self, result):
+    def _get_selected_match_idx(self, result, item_idx=None):
         """获取当前应选中的匹配索引（用户手动选择优先）"""
-        item_idx = None
-        for i, r in enumerate(self.match_results):
-            if r is result:
-                item_idx = i
-                break
+        if item_idx is None:
+            for i, r in enumerate(self.match_results):
+                if r is result:
+                    item_idx = i
+                    break
         if item_idx is not None and hasattr(self, '_user_selections') and item_idx in self._user_selections:
             user_path = self._user_selections[item_idx]
             for j, (img, _) in enumerate(result["matches"]):
                 if img["path"] == user_path:
                     return j
         return 0  # 默认选第一个
+
+    def _get_thumb(self, img_path):
+        """获取缩略图 CTkImage（缓存命中则直接返回）"""
+        if img_path not in self._thumb_cache:
+            try:
+                pil = Image.open(img_path)
+                pil.thumbnail(THUMB_CARD_SIZE, Image.BILINEAR)  # BILINEAR 比 LANCZOS 快3倍
+                self._thumb_cache[img_path] = ctk.CTkImage(pil, size=pil.size)
+            except Exception:
+                return None
+        return self._thumb_cache[img_path]
+
+    def _clear_thumb_cache(self):
+        """清理缩略图缓存（设置变化时调用）"""
+        self._thumb_cache.clear()
 
     def _build_thumb_card(self, parent, img_info, score, idx, is_active, is_checked, result):
         """构建一张候选缩略图卡片"""
@@ -847,17 +867,11 @@ class App(ctk.CTk):
         inner = ctk.CTkFrame(card, corner_radius=6, fg_color="#FFFFFF")
         inner.pack(fill="both", expand=True, padx=2, pady=2)
 
-        try:
-            pil = Image.open(img_info["path"])
-            pil.thumbnail(THUMB_CARD_SIZE, Image.LANCZOS)
-            ctk_img = ctk.CTkImage(pil, size=pil.size)
-        except Exception:
-            ctk_img = None
+        # 使用缓存获取缩略图
+        ctk_img = self._get_thumb(img_info["path"])
 
         img_lbl = ctk.CTkLabel(inner, image=ctk_img, text="")
         img_lbl.pack(expand=True, pady=(4, 0))
-        if ctk_img:
-            self._ctk_img_ref = ctk_img  # 防止GC
 
         score_lbl = ctk.CTkLabel(inner, text=f"{score}分",
                                   font=ctk.CTkFont(size=10, weight="bold"),
@@ -917,7 +931,7 @@ class App(ctk.CTk):
                 self._user_selections = {}
             self._user_selections[item_idx] = img["path"]
 
-        self._display_result(result)
+        self._display_result(result, item_idx)
 
     # ===================== 图片预览（含缩放/旋转） =====================
 
@@ -952,14 +966,19 @@ class App(ctk.CTk):
         except Exception as e:
             self._show_placeholder(f"无法加载图片:\n{e}")
 
-    def _render_preview(self):
+    def _render_preview(self, fast=False):
+        """渲染预览图
+        Args:
+            fast: True=使用快速算法（缩放滚动时），False=最高质量（停止滚动后）
+        """
         if self.pil_image is None:
             return
 
-        # 旋转
+        # 旋转（使用 NEAREST 保持速度）
         img = self.pil_image.copy()
         if self.rotation_angle != 0:
-            img = img.rotate(self.rotation_angle, expand=True, resample=Image.BICUBIC)
+            resample = Image.NEAREST if fast else Image.BICUBIC
+            img = img.rotate(self.rotation_angle, expand=True, resample=resample)
 
         # 获取 Canvas 实际可用尺寸
         cw = self.preview_canvas.winfo_width() - 4
@@ -977,7 +996,10 @@ class App(ctk.CTk):
 
         new_w = max(50, int(iw * ratio))
         new_h = max(50, int(ih * ratio))
-        img_r = img.resize((new_w, new_h), Image.LANCZOS)
+
+        # 缩放中快速模式用 BILINEAR，停止后用 LANCZOS
+        resize_filter = Image.BILINEAR if fast else Image.LANCZOS
+        img_r = img.resize((new_w, new_h), resize_filter)
 
         # 转为 PhotoImage (tkinter 原生格式) 用于 Canvas
         photo = ImageTk.PhotoImage(img_r)
@@ -1004,13 +1026,29 @@ class App(ctk.CTk):
         if self.zoom_level == ZOOM_FIT:
             self.zoom_level = 1.0
         self.zoom_level = max(ZOOM_MIN, min(ZOOM_MAX, self.zoom_level + delta))
-        self._render_preview()
+
+        # 快速渲染（BILINEAR），保证滚轮跟手
+        self._render_preview(fast=True)
+
+        # 防抖：用户停止滚动150ms后，用最高质量重绘
+        if self._zoom_timer:
+            self.after_cancel(self._zoom_timer)
+        self._zoom_timer = self.after(150, self._zoom_finalize)
+
+    def _zoom_finalize(self):
+        """缩放防抖回调：用最高质量重绘"""
+        self._zoom_timer = None
+        self._render_preview(fast=False)
 
     def _fit_zoom(self):
         if self.pil_image is None:
             return
         self.zoom_level = ZOOM_FIT
-        self._render_preview()
+        # 取消任何等待中的防抖
+        if self._zoom_timer:
+            self.after_cancel(self._zoom_timer)
+            self._zoom_timer = None
+        self._render_preview(fast=False)
 
     def _on_mousewheel(self, event):
         delta = ZOOM_STEP if event.delta > 0 else -ZOOM_STEP
@@ -1131,7 +1169,7 @@ class App(ctk.CTk):
                     self._set_status(f"匹配中 ({c}/{t}): {n[:18]}…")
         except queue.Empty:
             pass
-        self.after(50, self._poll_progress)
+        self.after(100, self._poll_progress)
 
     def _on_match_done(self):
         self.progress.set(1)
