@@ -98,6 +98,37 @@ def generate_template_excel(filepath):
 # ===================== 数据加载器 =====================
 class DataLoader:
     @staticmethod
+    def _split_filename(stem: str):
+        """
+        通过 CJK 文字边界拆分图片文件名
+        命名规律：中文名称写完后就是规格型号
+        例如: 齿轮箱弹性支撑UB-14_002_003 → (齿轮箱弹性支撑UB, 14_002_003)
+              K6泵-25S-8A-SIC-CS-R         → (K6泵, 25S-8A-SIC-CS-R)
+              螺栓M8-12.9                   → (螺栓, M8-12.9)
+        """
+        # 找最后一个汉字位置（CJK统一表意文字范围）
+        last_cjk = -1
+        for i, ch in enumerate(stem):
+            if '一' <= ch <= '鿿':
+                last_cjk = i
+        if last_cjk < 0:
+            return stem, ""  # 无中文 → 无法拆分，全文本兜底
+
+        # 尾随大写字母归入名称（如 "UB"、"A"），但大写+数字开头是型号（如 M8、A6）
+        name_end = last_cjk + 1
+        while name_end < len(stem) and 'A' <= stem[name_end] <= 'Z':
+            if name_end + 1 < len(stem) and '0' <= stem[name_end + 1] <= '9':
+                break  # 大写字母后紧跟数字 → 型号部分开始
+            name_end += 1
+
+        name_part = stem[:name_end]
+        rest = stem[name_end:]
+        # 跳过分隔符（- 或 _）
+        model_part = rest.lstrip('-_')
+
+        return (name_part, model_part) if model_part else (stem, "")
+
+    @staticmethod
     def load_images(image_dir):
         img_dir = Path(image_dir)
         if not img_dir.exists():
@@ -108,9 +139,11 @@ class DataLoader:
             if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"):
                 stem = f.stem
                 clean_stem = re.sub(r"[-_]\d+$", "", stem)
+                name_part, model_part = DataLoader._split_filename(clean_stem)
                 images.append({
                     "path": str(f), "filename": f.name, "stem": stem,
                     "clean_stem": clean_stem, "ext": f.suffix.lower(),
+                    "name_part": name_part, "model_part": model_part,
                 })
         return images
 
@@ -157,25 +190,43 @@ class MatcherEngine:
 
     def _build_index(self):
         self.candidate_texts = [clean_str(img["clean_stem"]) for img in self.images]
+        self.candidate_model = [clean_str(img["model_part"]) for img in self.images]
+        self.candidate_name = [clean_str(img["name_part"]) for img in self.images]
         self.idf_dict = build_idf_dict(self.candidate_texts)
+        self.model_idf = build_idf_dict(self.candidate_model)
+        self.name_idf = build_idf_dict(self.candidate_name)
 
     def set_params(self, threshold=None, top_k=None):
         if threshold is not None: self.threshold = threshold
         if top_k is not None: self.top_k = top_k
 
     def match(self, item):
-        query = build_candidate_text(
-            item["物料名称"], item.get("型号", "")
-        )
-        model_text = item.get("型号", "")
-        if not query.strip():
+        name_text = clean_str(item["物料名称"])
+        model_text = clean_str(item.get("型号", ""))
+        full_query = f"{name_text} {model_text}".strip()
+
+        if not full_query:
             return []
+
         results = []
         for idx, img in enumerate(self.images):
-            score = attention_score(query, self.candidate_texts[idx], self.idf_dict,
-                                    model_text=model_text)
-            if score >= self.threshold:
-                results.append((img, round(score, 1)))
+            model_candidate = self.candidate_model[idx]
+            name_candidate = self.candidate_name[idx]
+
+            if model_candidate and model_text:
+                # 双通道评分：型号占70%，名称占30%
+                model_score = attention_score(model_text, model_candidate, self.model_idf)
+                name_score = attention_score(name_text, name_candidate, self.name_idf) \
+                    if name_text and name_candidate else 0
+                combined = model_score * 0.7 + name_score * 0.3
+            else:
+                # 兜底：无法拆分型号 → 全文本匹配 + 型号奖励
+                combined = attention_score(full_query, self.candidate_texts[idx], self.idf_dict,
+                                          model_text=item.get("型号", ""))
+
+            if combined >= self.threshold:
+                results.append((img, round(combined, 1)))
+
         results.sort(key=lambda x: x[1], reverse=True)
         return results[:self.top_k]
 
